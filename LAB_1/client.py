@@ -6,7 +6,6 @@ import select
 
 HOST = '127.0.0.1'
 PORT = 9090
-
 CHUNK_SIZE = 4096
 RETRY_AMOUNT = 5
 
@@ -19,58 +18,69 @@ def setup_keepalive(sock):
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
 
-#TODO: destroy them
+
+def get_input_and_check_socket_win(sock):
+    input_buf = []
+
+    import msvcrt
+    while True:
+        read_list, _, error_list = select.select([sock], [], [sock], 0.0)
+        if sock in [read_list, error_list]:
+            try:
+                data = sock.recv(1, socket.MSG_PEEK)
+                if not data:
+                    print("\n[!] Server closed connection.")
+                    return None
+            except Exception:
+                print("\n[!] Connection lost (KeepAlive timeout).")
+                return None
+
+        if msvcrt.kbhit():
+            c = msvcrt.getwch()
+            if c == '\r':
+                print()
+                return ''.join(input_buf).strip()
+            elif c == '\x08':
+                if input_buf:
+                    input_buf.pop()
+                    sys.stdout.write('\b \b')
+                    sys.stdout.flush()
+            elif c == '\x03':
+                raise KeyboardInterrupt
+            else:
+                input_buf.append(c)
+                sys.stdout.write(c)
+                sys.stdout.flush()
+        else:
+            time.sleep(0.01)
+
+
+def get_input_and_check_socket_linux(sock):
+    input_buf = []
+    while True:
+        read_list, _, error_list = select.select([sys.stdin, sock], [], [sock], 0.1)
+        if sock in [read_list, error_list]:
+            try:
+                data = sock.recv(1, socket.MSG_PEEK)
+                if not data:
+                    print("\n[!] Server closed connection.")
+                    return None
+            except Exception:
+                print("\n[!] Connection lost (KeepAlive timeout).")
+                return None
+        if sys.stdin in read_list:
+            return sys.stdin.readline().strip()
+
+
 def get_input_and_check_socket(sock):
     sys.stdout.write("> ")
     sys.stdout.flush()
-    input_buf = []
 
     if sys.platform == 'win32':
-        import msvcrt
-        while True:
-            read_list, _, error_list = select.select([sock], [], [sock], 0.0)
-            if sock in [read_list, error_list]:
-                try:
-                    data = sock.recv(1, socket.MSG_PEEK)
-                    if not data:
-                        print("\n[!] Server closed connection.")
-                        return None
-                except Exception:
-                    print("\n[!] Connection lost (KeepAlive timeout).")
-                    return None
-
-            if msvcrt.kbhit():
-                c = msvcrt.getwch()
-                if c == '\r':
-                    print()
-                    return ''.join(input_buf).strip()
-                elif c == '\x08':
-                    if input_buf:
-                        input_buf.pop()
-                        sys.stdout.write('\b \b')
-                        sys.stdout.flush()
-                elif c == '\x03':
-                    raise KeyboardInterrupt
-                else:
-                    input_buf.append(c)
-                    sys.stdout.write(c)
-                    sys.stdout.flush()
-            else:
-                time.sleep(0.01)
+        return get_input_and_check_socket_win(sock)
     else:
-        while True:
-            read_list, _, error_list = select.select([sys.stdin, sock], [], [sock], 0.1)
-            if sock in [read_list, error_list]:
-                try:
-                    data = sock.recv(1, socket.MSG_PEEK)
-                    if not data:
-                        print("\n[!] Server closed connection.")
-                        return None
-                except Exception:
-                    print("\n[!] Connection lost (KeepAlive timeout).")
-                    return None
-            if sys.stdin in read_list:
-                return sys.stdin.readline().strip()
+        return get_input_and_check_socket_linux(sock)
+
 
 def read_line(conn):
     line = b''
@@ -83,6 +93,7 @@ def read_line(conn):
             return None
         line = data.split(b'\r\n')[0]
         return line.decode('utf-8', errors='ignore').strip()
+
 
 def connect_to_server_manual():
     while True:
@@ -98,6 +109,7 @@ def connect_to_server_manual():
             if ans != 'y':
                 sys.exit(0)
 
+
 def attempt_auto_reconnect():
     sys.stdout.write("\nConnection lost! Auto-reconnecting...\n")
     for _ in range(RETRY_AMOUNT):
@@ -110,11 +122,13 @@ def attempt_auto_reconnect():
             time.sleep(2)
     return None
 
+
 def calc_bitrate(bytes_transferred, duration):
     if duration <= 0:
         duration = 0.001
     mbps = ((bytes_transferred * 8) / duration) / 1024 / 1024
     print(f"\nTransfer finished. Bitrate: {mbps:.2f} Mbps")
+
 
 def print_progress(current, total, last_printed_percent):
     if total > 0:
@@ -127,13 +141,13 @@ def print_progress(current, total, last_printed_percent):
             return percent
     return last_printed_percent
 
+
 def do_download(s, parts):
     if len(parts) < 2:
         print("Usage: DOWNLOAD <filename>")
         return s
 
     filename = parts[1]
-
     while True:
         offset = os.path.getsize(filename) if os.path.exists(filename) else 0
         try:
@@ -151,7 +165,7 @@ def do_download(s, parts):
 
             filesize = int(resp[1])
             if offset >= filesize:
-                print("File already fully downloaded.")
+                print("\nFile already fully downloaded.")
                 return s
 
             if offset > 0:
@@ -174,8 +188,6 @@ def do_download(s, parts):
                     remaining -= len(chunk)
                     transferred += len(chunk)
                     last_percent = print_progress(offset + transferred, filesize, last_percent)
-
-            print()
             calc_bitrate(transferred, time.time() - start_time)
             return s
 
@@ -184,6 +196,7 @@ def do_download(s, parts):
             if s is None:
                 print("Failed to auto-reconnect.")
                 return None
+
 
 def do_upload(s, parts):
     if len(parts) < 2:
@@ -234,6 +247,7 @@ def do_upload(s, parts):
                 print("Failed to auto-reconnect.")
                 return None
 
+
 def set_host_port():
     global HOST, PORT
     user_host = input(f"Enter server IP (default {HOST}): ").strip()
@@ -243,6 +257,7 @@ def set_host_port():
         PORT = int(input(f"Enter server port (default {PORT}): ").strip())
     except ValueError:
         print("Invalid port, using default.")
+
 
 def main():
     global HOST, PORT
